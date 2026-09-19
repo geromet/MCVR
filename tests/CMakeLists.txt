@@ -1,5 +1,6 @@
-# Standalone, hardware-free unit tests. Needs only a C++23 compiler and the glm submodule:
-#   cmake -S tests -B build-tests && cmake --build build-tests && ctest --test-dir build-tests --output-on-failure
+# Standalone, hardware-free unit tests. Canonical repo-local entrypoint:
+#   bash tools/verify-unit-tests.sh
+# The verifier initializes only the pinned glm gitlink, clean-builds this directory, and runs ctest.
 # No Vulkan, GLFW, JNI headers or GPU required.
 cmake_minimum_required(VERSION 3.15)
 project(mcvr-tests LANGUAGES CXX)
