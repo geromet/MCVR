@@ -23,4 +23,4 @@ git submodule status extern/glm
 
 cmake -S tests -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+ctest --test-dir "$BUILD_DIR" --output-on-failure --verbose
