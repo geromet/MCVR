@@ -1,0 +1,30 @@
+name: MCVR hardware-free unit tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - tests/deterministic-suite
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+      TZ: UTC
+      BUILD_JOBS: 2
+    steps:
+      - name: Check out MCVR
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Run repo-local hardware-free verifier
+        shell: bash
+        run: bash tools/verify-unit-tests.sh
