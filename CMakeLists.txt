@@ -41,6 +41,7 @@ set(GLFW_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/extern/glfw/include)
 # Volk
 set(VOLK_BUILD_TESTS OFF CACHE BOOL "Disable tests")
 set(VOLK_BUILD_EXAMPLES OFF CACHE BOOL "Disable examples")
+set(VULKAN_HEADERS_INSTALL_DIR "${PROJECT_SOURCE_DIR}/extern/vulkan_headers" CACHE PATH "Use pinned Vulkan-Headers submodule" FORCE)
 add_subdirectory(extern/volk EXCLUDE_FROM_ALL)
 set(VOLK_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/extern/volk)
 
