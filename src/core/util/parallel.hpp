@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <cstdlib>
 #include <exception>
 #include <mutex>
@@ -14,10 +15,12 @@ inline uint32_t parallelThreadCount(const char *envName = "MCVR_SHADER_PACK_BUIL
     const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
     const char *rawValue = std::getenv(envName);
     if (rawValue != nullptr && rawValue[0] != '\0') {
-        char *end = nullptr;
-        long parsed = std::strtol(rawValue, &end, 10);
-        if (end != rawValue && parsed > 0) {
-            return static_cast<uint32_t>(std::min<long>(parsed, hardwareThreads));
+        uint32_t parsed = 0;
+        const char *end = rawValue;
+        while (*end != '\0') ++end;
+        const auto result = std::from_chars(rawValue, end, parsed, 10);
+        if (result.ec == std::errc{} && result.ptr == end && parsed > 0) {
+            return std::min(parsed, hardwareThreads);
         }
     }
     return std::min(8u, hardwareThreads);
