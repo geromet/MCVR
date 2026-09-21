@@ -17,6 +17,8 @@
 namespace {
 constexpr const char *KEY = "MCVR_TEST_THREADS";
 
+enum class ExecutableFixture { Exact, SamePathReplacement };
+
 struct ChildResult {
     int status = -1;
     std::string output;
@@ -42,30 +44,65 @@ std::string processExecutableIdentity(pid_t pid) {
            std::to_string(static_cast<unsigned long long>(st.st_size));
 }
 
-int immutableSelfExecutable() {
+bool copySelfTo(int destination) {
     const int source = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-    if (source < 0) return -1;
-    const int image = memfd_create("mcvr-thread-env-proof", MFD_ALLOW_SEALING | MFD_CLOEXEC);
-    if (image < 0) { close(source); return -1; }
+    if (source < 0) return false;
     char buffer[16384];
     for (;;) {
         const ssize_t n = read(source, buffer, sizeof(buffer));
         if (n == 0) break;
-        if (n < 0) { close(source); close(image); return -1; }
+        if (n < 0) { close(source); return false; }
         ssize_t written = 0;
         while (written < n) {
-            const ssize_t w = write(image, buffer + written, static_cast<size_t>(n - written));
-            if (w <= 0) { close(source); close(image); return -1; }
+            const ssize_t w = write(destination, buffer + written, static_cast<size_t>(n - written));
+            if (w <= 0) { close(source); return false; }
             written += w;
         }
     }
     close(source);
-    if (fchmod(image, 0500) != 0 || lseek(image, 0, SEEK_SET) < 0 ||
+    return lseek(destination, 0, SEEK_SET) >= 0;
+}
+
+int immutableSelfExecutable() {
+    const int image = memfd_create("mcvr-thread-env-proof", MFD_ALLOW_SEALING | MFD_CLOEXEC);
+    if (image < 0) return -1;
+    if (!copySelfTo(image) || fchmod(image, 0500) != 0 ||
         fcntl(image, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) != 0) {
         close(image);
         return -1;
     }
     return image;
+}
+
+// Create two byte-identical executable objects, authorize the first object, then
+// atomically replace its path with the second object before opening the launch
+// fd. This makes the authorization -> replacement -> spawn order mechanical.
+bool samePathReplacement(int &authorized, int &launch) {
+    char authorizedPath[] = "/tmp/mcvr-proof-authorized-XXXXXX";
+    char replacementPath[] = "/tmp/mcvr-proof-replacement-XXXXXX";
+    authorized = mkstemp(authorizedPath);
+    int replacement = mkstemp(replacementPath);
+    if (authorized < 0 || replacement < 0) {
+        if (authorized >= 0) close(authorized);
+        if (replacement >= 0) close(replacement);
+        authorized = -1;
+        return false;
+    }
+    bool ok = copySelfTo(authorized) && copySelfTo(replacement) &&
+              fchmod(authorized, 0500) == 0 && fchmod(replacement, 0500) == 0;
+    const std::string measured = ok ? fdIdentity(authorized) : std::string{};
+    if (ok) ok = !measured.empty() && rename(replacementPath, authorizedPath) == 0;
+    close(replacement);
+    if (ok) launch = open(authorizedPath, O_RDONLY | O_CLOEXEC);
+    unlink(authorizedPath);
+    unlink(replacementPath);
+    if (!ok || launch < 0 || fdIdentity(launch) == measured) {
+        if (launch >= 0) close(launch);
+        close(authorized);
+        authorized = launch = -1;
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::string> explicitEnvironment(const char *fixture, const std::string &attempt,
@@ -81,16 +118,29 @@ std::vector<std::string> explicitEnvironment(const char *fixture, const std::str
 }
 
 ChildResult runChild(const char *fixture, const std::string &attempt, const std::string &caseId,
-                     const std::optional<std::string> &expectedIdentityOverride = std::nullopt) {
+                     const std::optional<std::string> &expectedIdentityOverride = std::nullopt,
+                     ExecutableFixture executableFixture = ExecutableFixture::Exact) {
     ChildResult result;
-    const int image = immutableSelfExecutable();
-    if (image < 0) return result;
-    result.authorizedExecutable = fdIdentity(image);
-    const std::string expectedIdentity = expectedIdentityOverride.value_or(result.authorizedExecutable);
+    int authorized = -1;
+    int launch = -1;
+    if (executableFixture == ExecutableFixture::SamePathReplacement) {
+        if (!samePathReplacement(authorized, launch)) return result;
+    } else {
+        authorized = immutableSelfExecutable();
+        launch = authorized;
+        if (authorized < 0) return result;
+    }
+    result.authorizedExecutable = fdIdentity(authorized);
+    const std::string launchIdentity = fdIdentity(launch);
+    const std::string expectedIdentity = expectedIdentityOverride.value_or(launchIdentity);
 
     int outputPipe[2];
     int gatePipe[2];
-    if (pipe(outputPipe) != 0 || pipe(gatePipe) != 0) { close(image); return result; }
+    if (pipe(outputPipe) != 0 || pipe(gatePipe) != 0) {
+        if (launch != authorized) close(launch);
+        close(authorized);
+        return result;
+    }
     auto ownedEnv = explicitEnvironment(fixture, attempt, caseId, expectedIdentity, gatePipe[0]);
     std::vector<char *> envp;
     for (auto &entry : ownedEnv) envp.push_back(entry.data());
@@ -104,7 +154,7 @@ ChildResult runChild(const char *fixture, const std::string &attempt, const std:
         close(outputPipe[1]);
         char *const argv[] = {const_cast<char *>("mcvr-thread-env-proof"),
                               const_cast<char *>("--thread-env-child"), nullptr};
-        fexecve(image, argv, envp.data());
+        fexecve(launch, argv, envp.data());
         _exit(127);
     }
     close(outputPipe[1]);
@@ -132,24 +182,27 @@ ChildResult runChild(const char *fixture, const std::string &attempt, const std:
     close(outputPipe[0]);
     int status = 0;
     if (pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status)) result.status = WEXITSTATUS(status);
-    close(image);
+    if (launch != authorized) close(launch);
+    close(authorized);
     return result;
+}
+
+bool acceptsBound(const ChildResult &r, const std::string &attempt, const std::string &caseId,
+                  bool present, const std::string &value, uint32_t expected,
+                  bool enforceExecutableAssociation = true) {
+    if (r.status != 0) return false;
+    const auto record = thread_env_proof::parse(r.output);
+    if (!record || record->attempt != attempt || record->caseId != caseId ||
+        record->present != present || record->value != value || record->result != expected)
+        return false;
+    if (!enforceExecutableAssociation) return true;
+    return r.parentBinding && record->executableIdentity == r.authorizedExecutable &&
+           record->executableIdentity == r.parentObservedExecutable;
 }
 
 void checkBound(const ChildResult &r, const std::string &attempt, const std::string &caseId,
                 bool present, const std::string &value, uint32_t expected) {
-    CHECK_EQ(r.status, 0);
-    CHECK(r.parentBinding);
-    const auto record = thread_env_proof::parse(r.output);
-    CHECK(record.has_value());
-    if (!record) return;
-    CHECK_EQ(record->attempt, attempt);
-    CHECK_EQ(record->caseId, caseId);
-    CHECK_EQ(record->present, present);
-    CHECK_EQ(record->value, value);
-    CHECK_EQ(record->result, expected);
-    CHECK_EQ(record->executableIdentity, r.authorizedExecutable);
-    CHECK_EQ(record->executableIdentity, r.parentObservedExecutable);
+    CHECK(acceptsBound(r, attempt, caseId, present, value, expected));
 }
 
 uint32_t hw() { return std::max(1u, std::thread::hardware_concurrency()); }
@@ -216,10 +269,28 @@ TEST(thread_env_proof_rejects_wrong_or_stale_executable_identity) {
     checkBound(first, "attempt-first", "case-first", true, "1", 1u);
 
     const auto stale = runChild("1", "attempt-stale", "case-stale", first.authorizedExecutable);
-    CHECK(stale.status != 0);
-    CHECK(!stale.parentBinding || stale.output.empty());
+    CHECK(!acceptsBound(stale, "attempt-stale", "case-stale", true, "1", 1u));
 
     const auto wrong = runChild("1", "attempt-wrong", "case-wrong", std::string("0:0:0"));
-    CHECK(wrong.status != 0);
-    CHECK(wrong.output.empty());
+    CHECK(!acceptsBound(wrong, "attempt-wrong", "case-wrong", true, "1", 1u));
+}
+
+TEST(thread_env_proof_same_path_replacement_uses_canonical_acceptance_oracle) {
+#ifdef __linux__
+    const auto exact = runChild("2", "attempt-exact", "case-exact");
+    CHECK(acceptsBound(exact, "attempt-exact", "case-exact", true, "2", std::min(2u, hw())));
+
+    const auto replaced = runChild("2", "attempt-replaced", "case-replaced", std::nullopt,
+                                   ExecutableFixture::SamePathReplacement);
+    CHECK_EQ(replaced.status, 0);
+    CHECK(!replaced.parentObservedExecutable.empty());
+    CHECK(replaced.parentObservedExecutable != replaced.authorizedExecutable);
+    CHECK(!acceptsBound(replaced, "attempt-replaced", "case-replaced", true, "2", std::min(2u, hw())));
+
+    // Causality/sensitivity: all non-association evidence is accepted when only
+    // the executable-object association validator is deliberately bypassed.
+    CHECK(acceptsBound(replaced, "attempt-replaced", "case-replaced", true, "2", std::min(2u, hw()), false));
+#else
+    CHECK(true);
+#endif
 }
