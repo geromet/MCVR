@@ -125,7 +125,8 @@ TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
     std::mutex gateMutex;
     std::condition_variable gateCv;
     bool firstInside = false;
-    bool secondAttempting = false;
+    bool secondProbeComplete = false;
+    bool secondTryLockSucceeded = false;
     bool releaseFirst = false;
     bool secondInside = false;
     uint32_t firstObserved = 0;
@@ -139,7 +140,8 @@ TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
             std::unique_lock<std::mutex> gateLock(gateMutex);
             firstInside = true;
             gateCv.notify_all();
-            gateCv.wait(gateLock, [&] { return secondAttempting; });
+            gateCv.wait(gateLock, [&] { return secondProbeComplete; });
+            CHECK(!secondTryLockSucceeded);
         }
         firstObserved = parallelThreadCount(ENV);
         {
@@ -155,9 +157,16 @@ TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
         {
             std::unique_lock<std::mutex> gateLock(gateMutex);
             gateCv.wait(gateLock, [&] { return firstInside; });
-            secondAttempting = true;
+        }
+
+        secondTryLockSucceeded = envMutex.try_lock();
+        if (secondTryLockSucceeded) envMutex.unlock();
+        {
+            std::lock_guard<std::mutex> gateLock(gateMutex);
+            secondProbeComplete = true;
             gateCv.notify_all();
         }
+
         std::lock_guard<std::mutex> envLock(envMutex);
         {
             std::lock_guard<std::mutex> gateLock(gateMutex);
@@ -172,7 +181,8 @@ TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
     {
         std::unique_lock<std::mutex> gateLock(gateMutex);
         gateCv.wait(gateLock, [&] { return releaseFirst; });
-        CHECK(secondAttempting);
+        CHECK(secondProbeComplete);
+        CHECK(!secondTryLockSucceeded);
         CHECK(!secondInside);
     }
     first.join();
