@@ -3,6 +3,7 @@
 #include "core/util/parallel.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <mutex>
 #include <optional>
@@ -121,25 +122,64 @@ TEST(parallel_thread_count_unprotected_fixture_can_be_contaminated) {
 }
 
 TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
-    std::atomic<int> inside{0};
-    std::atomic<int> maxInside{0};
-    auto attempt = [&](const char *value) {
-        std::lock_guard<std::mutex> lock(envMutex);
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool firstInside = false;
+    bool secondAttempting = false;
+    bool releaseFirst = false;
+    bool secondInside = false;
+    uint32_t firstObserved = 0;
+    uint32_t secondObserved = 0;
+
+    std::thread first([&] {
+        std::lock_guard<std::mutex> envLock(envMutex);
         const SavedEnv saved = saveEnv();
-        setenv(ENV, value, 1);
-        const int now = ++inside;
-        int observed = maxInside.load();
-        while (observed < now && !maxInside.compare_exchange_weak(observed, now)) {}
-        CHECK_EQ(parallelThreadCount(ENV), std::min(static_cast<uint32_t>(value[0] - '0'), hw()));
-        std::this_thread::yield();
-        --inside;
+        setenv(ENV, "1", 1);
+        {
+            std::unique_lock<std::mutex> gateLock(gateMutex);
+            firstInside = true;
+            gateCv.notify_all();
+            gateCv.wait(gateLock, [&] { return secondAttempting; });
+        }
+        firstObserved = parallelThreadCount(ENV);
+        {
+            std::unique_lock<std::mutex> gateLock(gateMutex);
+            CHECK(!secondInside);
+            releaseFirst = true;
+            gateCv.notify_all();
+        }
         restoreEnv(saved);
-    };
-    std::thread first(attempt, "1");
-    std::thread second(attempt, "2");
+    });
+
+    std::thread second([&] {
+        {
+            std::unique_lock<std::mutex> gateLock(gateMutex);
+            gateCv.wait(gateLock, [&] { return firstInside; });
+            secondAttempting = true;
+            gateCv.notify_all();
+        }
+        std::lock_guard<std::mutex> envLock(envMutex);
+        {
+            std::lock_guard<std::mutex> gateLock(gateMutex);
+            secondInside = true;
+        }
+        const SavedEnv saved = saveEnv();
+        setenv(ENV, "2", 1);
+        secondObserved = parallelThreadCount(ENV);
+        restoreEnv(saved);
+    });
+
+    {
+        std::unique_lock<std::mutex> gateLock(gateMutex);
+        gateCv.wait(gateLock, [&] { return releaseFirst; });
+        CHECK(secondAttempting);
+        CHECK(!secondInside);
+    }
     first.join();
     second.join();
-    CHECK_EQ(maxInside.load(), 1);
+    CHECK_EQ(firstObserved, 1u);
+    CHECK_EQ(secondObserved, std::min(2u, hw()));
+    CHECK(secondInside);
 }
 
 TEST(parallel_for_visits_each_index_exactly_once) {
