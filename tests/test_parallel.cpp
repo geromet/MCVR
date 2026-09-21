@@ -92,6 +92,32 @@ TEST(parallel_thread_count_fixture_restores_exact_prior_state) {
     }
 }
 
+TEST(parallel_thread_count_unprotected_fixture_can_be_contaminated) {
+    std::lock_guard<std::mutex> outerLock(envMutex);
+    const SavedEnv saved = saveEnv();
+    std::atomic<bool> firstSet{false};
+    std::atomic<bool> secondSet{false};
+    std::string firstObserved;
+
+    std::thread first([&] {
+        setenv(ENV, "1", 1);
+        firstSet.store(true, std::memory_order_release);
+        while (!secondSet.load(std::memory_order_acquire)) std::this_thread::yield();
+        const char *observed = std::getenv(ENV);
+        firstObserved = observed != nullptr ? observed : "<unset>";
+    });
+    std::thread second([&] {
+        while (!firstSet.load(std::memory_order_acquire)) std::this_thread::yield();
+        setenv(ENV, "2", 1);
+        secondSet.store(true, std::memory_order_release);
+    });
+    first.join();
+    second.join();
+
+    CHECK_EQ(firstObserved, std::string("2"));
+    restoreEnv(saved);
+}
+
 TEST(parallel_thread_count_fixture_serializes_full_environment_interval) {
     std::atomic<int> inside{0};
     std::atomic<int> maxInside{0};
