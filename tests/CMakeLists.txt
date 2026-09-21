@@ -20,6 +20,7 @@ add_executable(mcvr_tests
     test_singleton.cpp
     test_parallel.cpp
     test_thread_env_child.cpp
+    test_thread_env_exec_identity.cpp
     test_shared_layout.cpp)
 target_include_directories(mcvr_tests PRIVATE ${MCVR_ROOT}/src ${MCVR_ROOT}/extern/glm)
 target_link_libraries(mcvr_tests PRIVATE Threads::Threads)
