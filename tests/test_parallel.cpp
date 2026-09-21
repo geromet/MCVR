@@ -66,30 +66,32 @@ TEST(parallel_thread_count_invalid_env_falls_back_to_default) {
 }
 
 TEST(parallel_thread_count_fixture_restores_exact_prior_state) {
-    {
-        std::lock_guard<std::mutex> lock(envMutex);
-        unsetenv(ENV);
-    }
-    CHECK_EQ(withEnv("2junk"), defaultThreads());
-    {
-        std::lock_guard<std::mutex> lock(envMutex);
-        CHECK(std::getenv(ENV) == nullptr);
-        setenv(ENV, "", 1);
-    }
-    CHECK_EQ(withEnv("2"), std::min(2u, hw()));
-    {
-        std::lock_guard<std::mutex> lock(envMutex);
-        const char *value = std::getenv(ENV);
-        CHECK(value != nullptr);
-        CHECK_EQ(std::string(value), std::string(""));
-        setenv(ENV, "17", 1);
-    }
-    CHECK_EQ(withEnv("1"), 1u);
-    {
-        std::lock_guard<std::mutex> lock(envMutex);
-        CHECK_EQ(std::string(std::getenv(ENV)), std::string("17"));
-        unsetenv(ENV);
-    }
+    std::lock_guard<std::mutex> lock(envMutex);
+    const SavedEnv ambient = saveEnv();
+
+    auto checkRestoration = [&](const char *prior, const char *fixture, uint32_t expected) {
+        if (prior) setenv(ENV, prior, 1);
+        else unsetenv(ENV);
+        const SavedEnv seeded = saveEnv();
+
+        if (fixture) setenv(ENV, fixture, 1);
+        else unsetenv(ENV);
+        CHECK_EQ(parallelThreadCount(ENV), expected);
+        restoreEnv(seeded);
+
+        const SavedEnv restored = saveEnv();
+        CHECK_EQ(restored.present, seeded.present);
+        CHECK_EQ(restored.value, seeded.value);
+    };
+
+    checkRestoration(nullptr, "2junk", defaultThreads());
+    checkRestoration("", "2", std::min(2u, hw()));
+    checkRestoration("17", "1", 1u);
+
+    restoreEnv(ambient);
+    const SavedEnv finalState = saveEnv();
+    CHECK_EQ(finalState.present, ambient.present);
+    CHECK_EQ(finalState.value, ambient.value);
 }
 
 TEST(parallel_thread_count_unprotected_fixture_can_be_contaminated) {
