@@ -1,5 +1,6 @@
 #include "harness.hpp"
 
+#include <cstdlib>
 #include <fcntl.h>
 #include <string>
 #include <sys/stat.h>
