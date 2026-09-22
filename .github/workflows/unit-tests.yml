@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - tests/deterministic-suite
+      - phase0/524-strict-thread-env
   workflow_dispatch:
 
 permissions:
