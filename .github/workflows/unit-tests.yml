@@ -26,6 +26,19 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Run repo-local hardware-free verifier
+      - name: Acquire exact pinned unit-test input
         shell: bash
-        run: bash tools/verify-unit-tests.sh
+        run: bash tools/verify-unit-tests.sh acquire
+
+      - name: Verify with network mechanically unavailable
+        shell: bash
+        run: bash tools/verify-unit-tests.sh verify-offline
+
+      - name: Emit retained phase evidence
+        if: always()
+        shell: bash
+        run: |
+          echo '=== acquisition evidence ==='
+          cat build-test-evidence/acquisition.log 2>/dev/null || true
+          echo '=== offline verification evidence ==='
+          cat build-test-evidence/offline-verification.log 2>/dev/null || true
