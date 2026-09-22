@@ -2,6 +2,7 @@
 #include "thread_env_protocol.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
 #include <linux/memfd.h>
@@ -17,7 +18,7 @@
 namespace {
 constexpr const char *KEY = "MCVR_TEST_THREADS";
 
-enum class ExecutableFixture { Exact, SamePathReplacement };
+enum class ExecutableFixture { Exact, DistinctImmutableReplacement };
 
 struct ChildResult {
     int status = -1;
@@ -74,35 +75,10 @@ int immutableSelfExecutable() {
     return image;
 }
 
-// Create two byte-identical executable objects, authorize the first object, then
-// atomically replace its path with the second object before opening the launch
-// fd. This makes the authorization -> replacement -> spawn order mechanical.
-bool samePathReplacement(int &authorized, int &launch) {
-    char authorizedPath[] = "/tmp/mcvr-proof-authorized-XXXXXX";
-    char replacementPath[] = "/tmp/mcvr-proof-replacement-XXXXXX";
-    authorized = mkstemp(authorizedPath);
-    int replacement = mkstemp(replacementPath);
-    if (authorized < 0 || replacement < 0) {
-        if (authorized >= 0) close(authorized);
-        if (replacement >= 0) close(replacement);
-        authorized = -1;
-        return false;
-    }
-    bool ok = copySelfTo(authorized) && copySelfTo(replacement) &&
-              fchmod(authorized, 0500) == 0 && fchmod(replacement, 0500) == 0;
-    const std::string measured = ok ? fdIdentity(authorized) : std::string{};
-    if (ok) ok = !measured.empty() && rename(replacementPath, authorizedPath) == 0;
-    close(replacement);
-    if (ok) launch = open(authorizedPath, O_RDONLY | O_CLOEXEC);
-    unlink(authorizedPath);
-    unlink(replacementPath);
-    if (!ok || launch < 0 || fdIdentity(launch) == measured) {
-        if (launch >= 0) close(launch);
-        close(authorized);
-        authorized = launch = -1;
-        return false;
-    }
-    return true;
+bool isMechanicallyImmutable(int fd) {
+    const int seals = fcntl(fd, F_GET_SEALS);
+    const int required = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+    return seals >= 0 && (seals & required) == required;
 }
 
 std::vector<std::string> explicitEnvironment(const char *fixture, const std::string &attempt,
@@ -121,16 +97,30 @@ ChildResult runChild(const char *fixture, const std::string &attempt, const std:
                      const std::optional<std::string> &expectedIdentityOverride = std::nullopt,
                      ExecutableFixture executableFixture = ExecutableFixture::Exact) {
     ChildResult result;
-    int authorized = -1;
-    int launch = -1;
-    if (executableFixture == ExecutableFixture::SamePathReplacement) {
-        if (!samePathReplacement(authorized, launch)) return result;
-    } else {
-        authorized = immutableSelfExecutable();
-        launch = authorized;
-        if (authorized < 0) return result;
+
+    // Both controls authorize the same construction class: a sealed memfd copied
+    // from this exact executable. Identity is measured only after sealing.
+    const int authorized = immutableSelfExecutable();
+    if (authorized < 0 || !isMechanicallyImmutable(authorized)) {
+        if (authorized >= 0) close(authorized);
+        return result;
     }
     result.authorizedExecutable = fdIdentity(authorized);
+    if (result.authorizedExecutable.empty()) { close(authorized); return result; }
+
+    // The negative differs only here, after immutable authorization: launch an
+    // independently constructed, byte-identical, equally sealed object through
+    // the same descriptor-direct fexecve path used by the positive control.
+    int launch = authorized;
+    if (executableFixture == ExecutableFixture::DistinctImmutableReplacement) {
+        launch = immutableSelfExecutable();
+        if (launch < 0 || !isMechanicallyImmutable(launch) ||
+            fdIdentity(launch).empty() || fdIdentity(launch) == result.authorizedExecutable) {
+            if (launch >= 0) close(launch);
+            close(authorized);
+            return result;
+        }
+    }
     const std::string launchIdentity = fdIdentity(launch);
     const std::string expectedIdentity = expectedIdentityOverride.value_or(launchIdentity);
 
@@ -275,21 +265,37 @@ TEST(thread_env_proof_rejects_wrong_or_stale_executable_identity) {
     CHECK(!acceptsBound(wrong, "attempt-wrong", "case-wrong", true, "1", 1u));
 }
 
-TEST(thread_env_proof_same_path_replacement_uses_canonical_acceptance_oracle) {
+TEST(thread_env_proof_matched_immutable_replacement_uses_canonical_acceptance_oracle) {
 #ifdef __linux__
     const auto exact = runChild("2", "attempt-exact", "case-exact");
     CHECK(acceptsBound(exact, "attempt-exact", "case-exact", true, "2", std::min(2u, hw())));
 
     const auto replaced = runChild("2", "attempt-replaced", "case-replaced", std::nullopt,
-                                   ExecutableFixture::SamePathReplacement);
+                                   ExecutableFixture::DistinctImmutableReplacement);
     CHECK_EQ(replaced.status, 0);
     CHECK(!replaced.parentObservedExecutable.empty());
     CHECK(replaced.parentObservedExecutable != replaced.authorizedExecutable);
     CHECK(!acceptsBound(replaced, "attempt-replaced", "case-replaced", true, "2", std::min(2u, hw())));
 
-    // Causality/sensitivity: all non-association evidence is accepted when only
-    // the executable-object association validator is deliberately bypassed.
+    // Causality: all non-association evidence is accepted when only the
+    // executable-object association validator is deliberately bypassed.
     CHECK(acceptsBound(replaced, "attempt-replaced", "case-replaced", true, "2", std::min(2u, hw()), false));
+#else
+    CHECK(true);
+#endif
+}
+
+TEST(thread_env_proof_authorized_executable_is_mechanically_immutable) {
+#ifdef __linux__
+    const int image = immutableSelfExecutable();
+    CHECK(image >= 0);
+    if (image >= 0) {
+        CHECK(isMechanicallyImmutable(image));
+        errno = 0;
+        CHECK_EQ(pwrite(image, "X", 1, 0), static_cast<ssize_t>(-1));
+        CHECK(errno == EPERM);
+        close(image);
+    }
 #else
     CHECK(true);
 #endif
