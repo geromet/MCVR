@@ -56,14 +56,27 @@ verify_offline() {
     echo 'phase_result=OFFLINE_BOUNDARY_UNAVAILABLE' >&2
     return 90
   fi
-  # A fresh user+network namespace has no host network interfaces/routes. The
-  # proof-bearing configure/build/CTest phase therefore cannot fetch inputs.
-  if ! unshare --user --map-root-user --net true; then
-    echo 'phase_result=OFFLINE_BOUNDARY_UNAVAILABLE' >&2
-    return 90
+
+  # Prefer an unprivileged user+network namespace. GitHub-hosted Ubuntu blocks
+  # that path, but grants passwordless sudo; in that case create only the
+  # network namespace as root and immediately drop back to the invoking uid/gid
+  # before the proof-bearing command. Both paths execute verify-local with no
+  # host network interface or route.
+  if unshare --user --map-root-user --net true 2>/dev/null; then
+    echo 'network_boundary=user+net-namespace'
+    exec unshare --user --map-root-user --net bash "$0" verify-local
   fi
-  echo 'network_boundary=user+net-namespace'
-  unshare --user --map-root-user --net bash "$0" verify-local
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    echo 'network_boundary=sudo-net-namespace+uid-drop'
+    exec sudo -n unshare --net -- runuser -u "$(id -un)" -- \
+      env BUILD_DIR="$BUILD_DIR" BUILD_JOBS="$BUILD_JOBS" EVIDENCE_DIR="$EVIDENCE_DIR" \
+      LC_ALL="${LC_ALL:-C.UTF-8}" LANG="${LANG:-C.UTF-8}" TZ="${TZ:-UTC}" \
+      bash "$0" verify-local
+  fi
+
+  echo 'phase_result=OFFLINE_BOUNDARY_UNAVAILABLE' >&2
+  return 90
 }
 
 case "$MODE" in
