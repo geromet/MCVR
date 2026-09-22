@@ -82,7 +82,7 @@ TEST(parallel_thread_count_fixture_restores_exact_prior_state) {
 
         const SavedEnv restored = saveEnv();
         CHECK_EQ(restored.present, seeded.present);
-        CHECK_EQ(restored.value, seeded.value);
+        CHECK(restored.value == seeded.value);
     };
 
     checkRestoration(nullptr, "2junk", defaultThreads());
@@ -92,7 +92,7 @@ TEST(parallel_thread_count_fixture_restores_exact_prior_state) {
     restoreEnv(ambient);
     const SavedEnv finalState = saveEnv();
     CHECK_EQ(finalState.present, ambient.present);
-    CHECK_EQ(finalState.value, ambient.value);
+    CHECK(finalState.value == ambient.value);
 }
 
 TEST(parallel_thread_count_unprotected_fixture_can_be_contaminated) {
@@ -117,7 +117,7 @@ TEST(parallel_thread_count_unprotected_fixture_can_be_contaminated) {
     first.join();
     second.join();
 
-    CHECK_EQ(firstObserved, std::string("2"));
+    CHECK(firstObserved == "2");
     restoreEnv(saved);
 }
 
