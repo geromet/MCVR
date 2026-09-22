@@ -161,7 +161,8 @@ ChildResult runChild(const char *fixture, const std::string &attempt, const std:
         result.parentBinding = !result.parentObservedExecutable.empty() &&
                                result.parentObservedExecutable == result.authorizedExecutable;
         const char release = 'R';
-        (void)write(gatePipe[1], &release, 1);
+        const ssize_t released = write(gatePipe[1], &release, 1);
+        if (released != 1) result.parentBinding = false;
     }
     close(gatePipe[1]);
     while (true) {
@@ -239,9 +240,9 @@ TEST(thread_env_proof_codec_is_injective_and_fail_closed) {
     const auto parsed = thread_env_proof::parse(encoded);
     CHECK(parsed.has_value());
     if (parsed) {
-        CHECK_EQ(parsed->attempt, record.attempt);
-        CHECK_EQ(parsed->caseId, record.caseId);
-        CHECK_EQ(parsed->value, record.value);
+        CHECK(parsed->attempt == record.attempt);
+        CHECK(parsed->caseId == record.caseId);
+        CHECK(parsed->value == record.value);
     }
     CHECK(!thread_env_proof::parse(encoded + "extra=1\n").has_value());
     std::string uppercase = encoded;
