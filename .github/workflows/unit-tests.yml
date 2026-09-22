@@ -1,0 +1,53 @@
+name: MCVR hardware-free unit tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - tests/deterministic-suite
+      - phase0/524-strict-thread-env
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+      TZ: UTC
+      BUILD_JOBS: 2
+    steps:
+      - name: Check out MCVR
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Acquire exact pinned unit-test input
+        shell: bash
+        run: bash tools/verify-unit-tests.sh acquire
+
+      - name: Verify with network mechanically unavailable
+        shell: bash
+        run: bash tools/verify-unit-tests.sh verify-offline
+
+      - name: Emit retained phase evidence
+        if: always()
+        shell: bash
+        run: |
+          echo '=== acquisition evidence ==='
+          cat build-test-evidence/acquisition.log 2>/dev/null || true
+          echo '=== offline verification evidence ==='
+          cat build-test-evidence/offline-verification.log 2>/dev/null || true
+
+      - name: Upload retained phase evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unit-test-phase-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-test-evidence/
+          if-no-files-found: error
+          retention-days: 14
