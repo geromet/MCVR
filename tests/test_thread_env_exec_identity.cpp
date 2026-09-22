@@ -68,14 +68,14 @@ TEST(thread_env_proof_same_path_post_measurement_replacement_is_rejected) {
     CHECK(copySelfTo(replacement));
     const std::string measured = fdIdentity(authorized);
     CHECK(!measured.empty());
-    CHECK_EQ(pathIdentity(authorizedPath), measured);
+    CHECK(pathIdentity(authorizedPath) == measured);
 
     // The apparent command/path is unchanged, but rename atomically substitutes a
     // different executable object after measurement. Acceptance must therefore
     // fail on object identity even though the replacement bytes are identical.
     CHECK(rename(replacementPath, authorizedPath) == 0);
     CHECK(!pathStillNamesAuthorizedObject(authorizedPath, measured));
-    CHECK_EQ(fdIdentity(authorized), measured);
+    CHECK(fdIdentity(authorized) == measured);
 
     close(replacement);
     close(authorized);
