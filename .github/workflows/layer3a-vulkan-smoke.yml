@@ -1,0 +1,57 @@
+name: MCVR Layer-3A LavaPipe Vulkan smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - phase0/501-layer3a-vulkan-smoke
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layer3a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+      TZ: UTC
+      BUILD_JOBS: 2
+    steps:
+      - name: Check out MCVR
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          # Bind the proof to the exact PR head, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install the software-Vulkan/X11 test stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            libvulkan-dev vulkan-validationlayers mesa-vulkan-drivers vulkan-tools \
+            libglfw3-dev xvfb xauth x11-utils
+
+      - name: Record admitted runtime packages
+        run: |
+          dpkg-query -W -f='${Package} ${Version}\n' \
+            mesa-vulkan-drivers libvulkan1 vulkan-validationlayers libglfw3 libglfw3-dev xvfb \
+            | sort
+          vulkaninfo --summary || true
+          ls -l /usr/share/vulkan/icd.d /usr/share/vulkan/explicit_layer.d
+
+      - name: Run the repo-local Layer-3A verifier
+        run: bash tools/layer3a-vulkan-smoke.sh --verify
+
+      - name: Print evidence on completion
+        if: always()
+        run: |
+          for file in build-layer3a/attempt-*/evidence/evidence.json; do
+            if [ -f "$file" ]; then
+              echo "===== $file ====="
+              cat "$file"
+            fi
+          done
