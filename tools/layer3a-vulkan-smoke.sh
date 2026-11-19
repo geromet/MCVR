@@ -307,6 +307,12 @@ def sh(*cmd):
 env = os.environ
 basis = {
     "basis_kind": "sealed-component-closure",
+    "ci_run": {
+        "event_sha": env.get("GITHUB_SHA"),
+        "run_id": env.get("GITHUB_RUN_ID"),
+        "run_attempt": env.get("GITHUB_RUN_ATTEMPT"),
+        "workflow_ref": env.get("GITHUB_WORKFLOW_REF"),
+    },
     "source": {
         "repository": "geromet/MCVR",
         "head": env["SOURCE_HEAD"],
