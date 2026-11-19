@@ -82,3 +82,5 @@ bin/*
 ###### CLion ######
 .idea
 cmake-build*
+###### Layer-3A verification work ######
+build-layer3a/

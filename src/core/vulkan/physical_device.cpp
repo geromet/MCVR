@@ -1,5 +1,6 @@
 #include "core/vulkan/physical_device.hpp"
 
+#include "core/vulkan/device_policy.hpp"
 #include "core/vulkan/instance.hpp"
 #include "core/vulkan/window.hpp"
 
@@ -12,52 +13,6 @@ std::ostream &physicalDeviceCout() {
 
 std::ostream &physicalDeviceCerr() {
     return std::cerr << "[PhysicalDevice] ";
-}
-
-bool isDeviceSuitable(VkPhysicalDevice device) {
-    // check extension
-    uint32_t extensionCount = 0;
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
-
-    bool hasSwapchain = false;
-    bool hasRayTracing = false;
-
-    for (const auto &ext : availableExtensions) {
-        if (std::string(ext.extensionName) == VK_KHR_SWAPCHAIN_EXTENSION_NAME) { hasSwapchain = true; }
-        if (std::string(ext.extensionName) == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) { hasRayTracing = true; }
-    }
-
-    if (!hasSwapchain || !hasRayTracing) return false;
-
-    // check features
-    VkPhysicalDeviceVulkan12Features vulkan12Features{};
-    vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-
-    VkPhysicalDeviceVulkan13Features vulkan13Features{};
-    vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    vulkan13Features.pNext = &vulkan12Features;
-
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
-    accelerationStructureFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-    accelerationStructureFeatures.pNext = &vulkan13Features;
-
-    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingFeatures = {};
-    rayTracingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
-    rayTracingFeatures.pNext = &accelerationStructureFeatures;
-
-    VkPhysicalDeviceFeatures2 features2 = {};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &rayTracingFeatures;
-
-    vkGetPhysicalDeviceFeatures2(device, &features2);
-    if (!rayTracingFeatures.rayTracingPipeline || !accelerationStructureFeatures.accelerationStructure ||
-        !vulkan13Features.synchronization2 || !vulkan12Features.bufferDeviceAddress) {
-        return false;
-    } else {
-        return true;
-    }
 }
 
 void vk::PhysicalDevice::findPhysicalDevice() {
@@ -75,11 +30,13 @@ void vk::PhysicalDevice::findPhysicalDevice() {
 
     // find the first supported physical device
     for (const auto &device : devices) {
-        if (isDeviceSuitable(device)) {
+        if (mcvr::device_policy::isDeviceSuitable(device)) {
             VkPhysicalDeviceProperties properties;
             vkGetPhysicalDeviceProperties(device, &properties);
 
-            if (properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) continue;
+            if (!mcvr::device_policy::isDeviceAdmitted(properties, mcvr::device_policy::Admission::ProductionDiscreteOnly)) {
+                continue;
+            }
 
             physicalDevice_ = device;
 #ifdef DEBUG
