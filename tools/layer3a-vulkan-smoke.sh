@@ -147,9 +147,19 @@ done
 [ -n "$ICD_MANIFEST" ] || fail "LavaPipe ICD manifest not found (install mesa-vulkan-drivers)"
 ICD_MANIFEST="$(absolute "$ICD_MANIFEST")"
 ICD_LIBRARY="$(python3 - "$ICD_MANIFEST" <<'PY'
-import json, sys
+import json, os, subprocess, sys
 manifest = json.load(open(sys.argv[1]))
-print(manifest["ICD"]["library_path"])
+path = manifest["ICD"]["library_path"]
+if not os.path.isabs(path):
+    local = os.path.join(os.path.dirname(sys.argv[1]), path)
+    if os.path.exists(local):
+        path = local
+    else:
+        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True).stdout
+        hits = [line.split("=>")[-1].strip() for line in out.splitlines() if os.path.basename(path) in line]
+        hits = [hit for hit in hits if hit]
+        path = hits[0] if hits else path
+print(path)
 PY
 )"
 [ -f "$ICD_LIBRARY" ] || fail "LavaPipe ICD library does not exist: $ICD_LIBRARY"
@@ -167,11 +177,18 @@ done
 [ -n "$VALIDATION_MANIFEST" ] || fail "Khronos validation layer manifest not found (install vulkan-validationlayers)"
 VALIDATION_MANIFEST="$(absolute "$VALIDATION_MANIFEST")"
 VALIDATION_LIBRARY="$(python3 - "$VALIDATION_MANIFEST" <<'PY'
-import json, os, sys
+import json, os, subprocess, sys
 manifest = json.load(open(sys.argv[1]))
 path = manifest["layer"]["library_path"]
 if not os.path.isabs(path):
-    path = os.path.join(os.path.dirname(sys.argv[1]), path)
+    local = os.path.join(os.path.dirname(sys.argv[1]), path)
+    if os.path.exists(local):
+        path = local
+    else:
+        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True).stdout
+        hits = [line.split("=>")[-1].strip() for line in out.splitlines() if os.path.basename(path) in line]
+        hits = [hit for hit in hits if hit]
+        path = hits[0] if hits else path
 print(path)
 PY
 )"
