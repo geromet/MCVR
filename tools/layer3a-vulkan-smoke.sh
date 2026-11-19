@@ -133,7 +133,12 @@ PRODUCTION_POLICY="$BUILD_DIR/layer3a_production_policy"
 log "resolving runtime basis"
 
 ICD_MANIFEST=""
-for candidate in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json /usr/share/vulkan/icd.d/lvp_icd.json; do
+for candidate in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+    /usr/share/vulkan/icd.d/lvp_icd.json \
+    /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+    case "$candidate" in
+    *.i686.*) continue ;;
+    esac
     if [ -f "$candidate" ]; then
         ICD_MANIFEST="$candidate"
         break
@@ -152,7 +157,8 @@ ICD_LIBRARY="$(absolute "$ICD_LIBRARY")"
 
 VALIDATION_MANIFEST=""
 for candidate in /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json \
-    /usr/local/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json; do
+    /usr/local/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json \
+    /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.*.json; do
     if [ -f "$candidate" ]; then
         VALIDATION_MANIFEST="$candidate"
         break
@@ -339,6 +345,7 @@ basis = {
         "LD_PRELOAD": "absent",
         "LD_LIBRARY_PATH": "absent",
         "LP_NUM_THREADS": "1",
+        "working_directory": "attempt-scoped",
     },
 }
 
@@ -377,7 +384,12 @@ CHILD_ENV=(
 run_child() {
     local logfile="$1"
     shift
-    timeout "$SMOKE_TIMEOUT" "${CHILD_ENV[@]}" "$@" >"$logfile" 2>&1
+    # Attempt-scoped working directory: cwd is a Vulkan layer-settings search
+    # root, so the caller's cwd must not participate in the proof.
+    (
+        cd "$ATTEMPT"
+        timeout "$SMOKE_TIMEOUT" "${CHILD_ENV[@]}" "$@" >"$logfile" 2>&1
+    )
 }
 
 record() {

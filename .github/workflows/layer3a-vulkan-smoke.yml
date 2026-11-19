@@ -39,8 +39,7 @@ jobs:
             mesa-vulkan-drivers libvulkan1 vulkan-validationlayers libglfw3 libglfw3-dev xvfb \
             | sort
           vulkaninfo --summary || true
-          ls -l /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-          ls -l /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json
+          ls -l /usr/share/vulkan/icd.d /usr/share/vulkan/explicit_layer.d
 
       - name: Run the repo-local Layer-3A verifier
         run: bash tools/layer3a-vulkan-smoke.sh --verify
